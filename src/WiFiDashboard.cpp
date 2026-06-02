@@ -2,7 +2,8 @@
 
 WiFiDashboard::WiFiDashboard()
     : clientConnected(false), server(WEB_SERVER_PORT), lastClientCheckTime(0),
-      trendIndex(0), lastTrendSampleTime(0) {
+      trendIndex(0), lastTrendSampleTime(0), hartTxCount(0), hartRxCount(0),
+      carrierDetected(false), batteryPercentage(100), bootTime(0) {
   memset(trendBuffer, 0, sizeof(trendBuffer));
 }
 
@@ -21,6 +22,8 @@ void WiFiDashboard::begin() {
   // Start web server
   server.begin();
   Serial.println("[WiFi] Web server started");
+  
+  bootTime = millis();
 }
 
 void WiFiDashboard::end() {
@@ -38,22 +41,40 @@ bool WiFiDashboard::hasClient() const {
   return clientConnected;
 }
 
+void WiFiDashboard::recordHartTx() {
+  hartTxCount++;
+}
+
+void WiFiDashboard::recordHartRx() {
+  hartRxCount++;
+}
+
+void WiFiDashboard::setCarrierDetected(bool detected) {
+  carrierDetected = detected;
+}
+
+void WiFiDashboard::setBatteryPercentage(uint8_t percentage) {
+  batteryPercentage = percentage;
+}
+
 void WiFiDashboard::setupRoutes() {
   // Root dashboard
   server.on("/", HTTP_GET, [this](AsyncWebServerRequest *request) {
     request->send(200, "text/html; charset=utf-8", generateDashboardHtml());
   });
 
-  // JSON API for status updates
+  // JSON API for status updates - returns real data
   server.on("/api/status", HTTP_GET, [this](AsyncWebServerRequest *request) {
+    unsigned long uptime = (millis() - bootTime) / 1000;
     String json = "{";
     json += "\"mode\":\"wifi\",";
     json += "\"bt_connected\":false,";
     json += "\"wifi_connected\":true,";
-    json += "\"uptime\":" + String(millis() / 1000) + ",";
-    json += "\"hart_tx\":" + String(0) + ",";
-    json += "\"hart_rx\":" + String(0) + ",";
-    json += "\"hart_carrier\":" + String(0) + ",";
+    json += "\"uptime\":" + String(uptime) + ",";
+    json += "\"hart_tx\":" + String(hartTxCount) + ",";
+    json += "\"hart_rx\":" + String(hartRxCount) + ",";
+    json += "\"hart_carrier\":" + (carrierDetected ? "true" : "false") + ",";
+    json += "\"battery\":" + String(batteryPercentage) + ",";
     json += "\"heap\":" + String(ESP.getFreeHeap());
     json += "}";
     request->send(200, "application/json", json);
@@ -103,19 +124,6 @@ void WiFiDashboard::write(uint8_t byte) {
 }
 
 void WiFiDashboard::flush() {}
-
-void WiFiDashboard::setHartActivity(bool txRx) {
-  // Update trend tracking
-}
-
-void WiFiDashboard::recordTrendSample(bool carrier, uint32_t hartActivityCount) {
-  unsigned long now = millis();
-  if (now - lastTrendSampleTime >= TREND_SAMPLE_INTERVAL_MS) {
-    lastTrendSampleTime = now;
-    trendBuffer[trendIndex] = hartActivityCount & 0xFFFF;
-    trendIndex = (trendIndex + 1) % TREND_BUFFER_SIZE;
-  }
-}
 
 String WiFiDashboard::generateDashboardHtml() {
   String html = R"rawliteral(
@@ -291,7 +299,7 @@ String WiFiDashboard::generateDashboardHtml() {
 
                 document.getElementById('mode').textContent = data.mode.toUpperCase();
                 document.getElementById('uptime').textContent = formatUptime(data.uptime);
-                document.getElementById('battery').textContent = data.battery || '--';
+                document.getElementById('battery').textContent = data.battery !== undefined ? data.battery : '--';
                 document.getElementById('heap').textContent = (data.heap / 1024).toFixed(1);
                 document.getElementById('hart-tx').textContent = data.hart_tx;
                 document.getElementById('hart-rx').textContent = data.hart_rx;
