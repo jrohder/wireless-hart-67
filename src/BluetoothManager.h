@@ -19,6 +19,7 @@ public:
 
 private:
   BluetoothSerial btSerial;
+  bool initialized;
 };
 
 #endif  // BLUETOOTH_MANAGER_H
