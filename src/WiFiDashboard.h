@@ -6,12 +6,31 @@
 #include <ESPAsyncWebServer.h>
 #include "Config.h"
 
+struct DashboardSnapshot {
+  OperatingMode mode = MODE_WIFI;
+  bool btConnected = false;
+  bool wifiClientConnected = false;
+  float batteryVoltage = 0.0f;
+  uint8_t batteryPercent = 0;
+  unsigned long uptimeSec = 0;
+  bool hartCarrier = false;
+  uint32_t hartTxBytes = 0;
+  uint32_t hartRxBytes = 0;
+  unsigned long hartLastActivitySecAgo = 0;
+  uint32_t freeHeap = 0;
+  int wifiRssi = 0;
+  uint32_t cpuFreqMhz = 0;
+  String macAddress;
+  uint8_t chipRevision = 0;
+  float chipTempC = NAN;
+};
+
 class WiFiDashboard {
 public:
   WiFiDashboard();
   void begin();
   void end();
-  void update();
+  void update(const DashboardSnapshot &snapshot);
 
   int available();
   uint8_t read();
@@ -19,24 +38,23 @@ public:
   void flush();
   bool hasClient() const;
 
-  void setHartActivity(bool txRx);
-  void recordTrendSample(bool carrier, uint32_t hartActivityCount);
-
 private:
   void setupRoutes();
   String generateDashboardHtml();
-  String generateTrendJson();
+  String generateStatusJson() const;
+  String generateTrendJson() const;
   void handleNotFound(AsyncWebServerRequest *request);
   void checkClientConnection();
+  void sampleTrend(const DashboardSnapshot &snapshot);
 
   bool clientConnected;
   AsyncWebServer server;
   unsigned long lastClientCheckTime;
-  uint16_t trendBuffer[TREND_BUFFER_SIZE];
-  int trendIndex;
+  unsigned long bootTime;
   unsigned long lastTrendSampleTime;
-  uint32_t hartActivityCount;
-  bool carrierDetected;
+  int trendIndex;
+  uint16_t trendBuffer[TREND_BUFFER_SIZE];
+  DashboardSnapshot snapshot;
 };
 
 #endif  // WIFI_DASHBOARD_H

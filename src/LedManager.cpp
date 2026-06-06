@@ -103,7 +103,7 @@ void LedManager::setHartBrightness(uint8_t brightness) {
 void LedManager::setHartPulse() {
   hartPulsing = true;
   hartPulseStartTime = millis();
-  hartCurrentColor = COLOR_GREEN;
+  applyColor(HART_LED_RED, HART_LED_GREEN, 0xFF, COLOR_GREEN, hartBrightness);
 }
 
 void LedManager::stopHartPulse() {

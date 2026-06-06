@@ -10,7 +10,6 @@ public:
   void begin();
   void update();
 
-  // RGB LED control
   void setRgbColor(LedColor color);
   void setRgbBrightness(uint8_t brightness);
   void setRgbAlternating(LedColor color1, LedColor color2,
@@ -18,21 +17,18 @@ public:
   void setRgbFlashing(LedColor color, unsigned long intervalMs);
   void stopRgbAnimation();
 
-  // HART LED control
   void setHartColor(LedColor color);
   void setHartBrightness(uint8_t brightness);
   void setHartPulse();
   void stopHartPulse();
 
-  // Battery display override
   void showBatteryStatus(uint8_t percentage);
   void clearBatteryStatus();
 
-  // Status queries
   bool isBatteryStatusShowing() const { return batteryStatusActive; }
+  bool isHartPulsing() const { return hartPulsing; }
 
 private:
-  // RGB LED state
   LedColor rgbCurrentColor;
   uint8_t rgbBrightness;
   unsigned long rgbAnimationInterval;
@@ -41,17 +37,14 @@ private:
   bool rgbAnimating;
   bool rgbAlternating;
 
-  // HART LED state
   LedColor hartCurrentColor;
   uint8_t hartBrightness;
   bool hartPulsing;
   unsigned long hartPulseStartTime;
 
-  // Battery status override
   bool batteryStatusActive;
   unsigned long batteryStatusStartTime;
 
-  // Helper functions
   void setPin(uint8_t pin, bool active);
   void updateRgb();
   void updateHart();
