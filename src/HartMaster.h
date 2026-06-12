@@ -46,7 +46,8 @@ public:
     float loopCurrent = NAN;
     float percentRange = NAN;
     String pvUnits;
-    // Cached from Command 15 (Read PV Output Information) during auto-poll.
+    uint8_t pvUnitsCode = 0;
+    // Cached from Command 15 / 14 during auto-poll or on-demand read.
     uint8_t configUnits = 0;
     float configUrv = NAN;
     float configLrv = NAN;
@@ -88,6 +89,11 @@ public:
   bool isCommandPending();
   // Ask the auto-poller to refresh device data on the next cycles (no web queue).
   void requestRefresh();
+  // On-demand configuration read (Commands 15 + 14) and maintenance writes.
+  bool readConfigurationNow();
+  bool writeRangeValues(float urv, float lrv);
+  bool writeDampingValue(float seconds);
+  bool writePollAddressValue(uint8_t addr);
 
   // --- Protocol helpers (static, unit-testable) ---
   static uint8_t checksum(const uint8_t *data, size_t len);
@@ -130,6 +136,11 @@ private:
   bool doCommand0(bool useLong, uint8_t pollAddr);  // identity + long addr
   bool pollDynamic();                                // rotate cmd 1/2/3/13/20
   void serviceQueuedCommand();                       // run one pending command
+  bool executeCommandWait(uint8_t command, const uint8_t *data, uint8_t len,
+                          uint32_t timeoutMs);
+  void applyResponse(uint8_t cmd, const uint8_t *p, uint8_t len);
+  static void wrFloatBe(float f, uint8_t *out);
+  uint8_t effectiveUnitsCode() const;
 
   // ---- Command queue (shared web task <-> bridge task) ----
   portMUX_TYPE cmdMux;

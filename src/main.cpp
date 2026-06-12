@@ -158,14 +158,11 @@ void bridgeTask(void *param) {
 
     // ---- Autonomous HART master + queued commands ----
     if (hartMaster.isCommandPending()) {
-      // Web UI commands must not wait behind USB/TCP byte forwarding. Force
-      // receive mode and run immediately unless an external host is actively
-      // transmitting on the loop right now.
-      if (hart.isTransmitting() && !Serial.available() && !tcp.available()) {
+      // Web/maintenance commands always preempt passive USB idle forwarding.
+      if (hart.isTransmitting()) {
         hart.endTransmit();
       }
-      bool hostTx = Serial.available() || tcp.available() || hart.isTransmitting();
-      if (!hostTx && systemStatus.requestOwnership(OWNER_INTERNAL)) {
+      if (systemStatus.requestOwnership(OWNER_INTERNAL)) {
         hartMaster.service(now);
         didWork = true;
       }

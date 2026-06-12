@@ -4,7 +4,7 @@
 #include <Arduino.h>
 
 // ==================== Firmware ====================
-#define FW_VERSION "3.0.1"
+#define FW_VERSION "3.0.2"
 #define FW_BUILD_DATE __DATE__
 
 // Set to 0 for production use with PACTware over USB: the single USB UART is

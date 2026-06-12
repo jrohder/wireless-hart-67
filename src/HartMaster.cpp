@@ -101,25 +101,71 @@ String HartMaster::unpackAscii(const uint8_t *b, int nbytes) {
 
 String HartMaster::unitString(uint8_t code) {
   switch (code) {
-  case 1: return "InH2O";
-  case 2: return "InHg";
-  case 6: return "PSI";
+  case 1: return "inH2O";
+  case 2: return "inHg";
+  case 3: return "ftH2O";
+  case 4: return "mmH2O";
+  case 5: return "mH2O";
+  case 6: return "psi";
   case 7: return "bar";
   case 8: return "mbar";
-  case 10: return "kPa";
+  case 9: return "g/cm2";
+  case 10: return "kg/cm2";
   case 11: return "Pa";
-  case 12: return "mmH2O";
+  case 12: return "mmHg";
+  case 13: return "torr";
+  case 14: return "atm";
+  case 15: return "N/m2";
+  case 16: return "kPa";
+  case 17: return "MPa";
   case 32: return "degC";
   case 33: return "degF";
   case 34: return "degR";
   case 35: return "K";
   case 36: return "mV";
   case 37: return "Ohm";
+  case 38: return "Hz";
   case 39: return "mA";
+  case 40: return "gal/s";
+  case 41: return "L/s";
+  case 42: return "Impgal/s";
+  case 43: return "Impgal/min";
+  case 44: return "L/min";
+  case 45: return "gal/min";
+  case 46: return "ft/s";
+  case 47: return "m/s";
+  case 48: return "ft/min";
+  case 49: return "m/min";
   case 57: return "%";
+  case 58: return "mA";
+  case 59: return "L/h";
+  case 60: return "gal/h";
+  case 61: return "Impgal/h";
   case 240: return "mfr";
-  default: return "u" + String(code);
+  default: return "code " + String(code);
   }
+}
+
+void HartMaster::wrFloatBe(float f, uint8_t *out) {
+  union {
+    float v;
+    uint8_t b[4];
+  } u;
+  u.v = f;
+  out[0] = u.b[3];
+  out[1] = u.b[2];
+  out[2] = u.b[1];
+  out[3] = u.b[0];
+}
+
+uint8_t HartMaster::effectiveUnitsCode() const {
+  if (device.configUnits) {
+    return device.configUnits;
+  }
+  if (device.pvUnitsCode) {
+    return device.pvUnitsCode;
+  }
+  return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -297,41 +343,31 @@ bool HartMaster::doCommand0(bool useLong, uint8_t pollAddr) {
 
 void HartMaster::requestRefresh() {
   refreshBurst = true;
-  pollStep = 0;
-  lastActionMs = 0;  // bypass poll interval on next service() call
+  pollStep = 2;  // next poll is Command 15 (range/config)
+  lastActionMs = 0;
 }
 
-bool HartMaster::pollDynamic() {
-  // Rotate through data commands. Cmd 15 caches range/damping for the web UI.
-  static const uint8_t seq[] = {3, 2, 15, 3, 13, 3, 20, 3, 12, 3, 0};
-  uint8_t cmd = seq[pollStep % (sizeof(seq) / sizeof(seq[0]))];
-  pollStep++;
-
-  bool ok = transact(true, 0, cmd, nullptr, 0);
-  if (!ok) {
-    return false;
-  }
-  const uint8_t *p = rxPayload;
-  uint8_t len = rxPayloadLen;
-
+void HartMaster::applyResponse(uint8_t cmd, const uint8_t *p, uint8_t len) {
   switch (cmd) {
-  case 1:  // Read PV: units + float
+  case 1:
     if (len >= 5) {
+      device.pvUnitsCode = p[0];
       device.pvUnits = unitString(p[0]);
       device.pv = beFloat(&p[1]);
     }
     break;
-  case 2:  // Read loop current and percent of range
+  case 2:
     if (len >= 8) {
       device.loopCurrent = beFloat(&p[0]);
       device.percentRange = beFloat(&p[4]);
     }
     break;
-  case 3:  // Loop current + up to 4 dynamic variables
+  case 3:
     if (len >= 4) {
       device.loopCurrent = beFloat(&p[0]);
     }
     if (len >= 9) {
+      device.pvUnitsCode = p[4];
       device.pvUnits = unitString(p[4]);
       device.pv = beFloat(&p[5]);
     }
@@ -345,9 +381,28 @@ bool HartMaster::pollDynamic() {
       device.qv = beFloat(&p[20]);
     }
     break;
-  case 15:  // PV output information: units, URV, LRV, damping, write protect
-    if (len >= 2) {
+  case 14:  // Transducer information (alternate range source)
+    if (len >= 4 && p[3]) {
+      device.configUnits = p[3];
+      device.pvUnitsCode = p[3];
+      device.pvUnits = unitString(p[3]);
+    }
+    if (len >= 8) {
+      device.configUrv = beFloat(&p[4]);
+    }
+    if (len >= 12) {
+      device.configLrv = beFloat(&p[8]);
+    }
+    if (len >= 12) {
+      device.configValid = true;
+      device.configLastMs = millis();
+    }
+    break;
+  case 15:  // PV output information
+    if (len >= 1 && p[0]) {
       device.configUnits = p[0];
+      device.pvUnitsCode = p[0];
+      device.pvUnits = unitString(p[0]);
     }
     if (len >= 6) {
       device.configUrv = beFloat(&p[2]);
@@ -361,19 +416,20 @@ bool HartMaster::pollDynamic() {
     if (len >= 15) {
       device.writeProtect = p[14];
     }
-    device.configValid = (len >= 14);
-    device.configLastMs = millis();
+    if (len >= 14) {
+      device.configValid = true;
+      device.configLastMs = millis();
+    }
     break;
-  case 12:  // Read message (32 chars packed ASCII = 24 bytes)
+  case 12:
     if (len >= 24) {
       device.message = unpackAscii(&p[0], 24);
     }
     break;
-  case 13:  // Tag (8 chars), descriptor (16 chars), date (3 bytes)
+  case 13:
     if (len >= 21) {
       device.tag = unpackAscii(&p[0], 6);
       device.descriptor = unpackAscii(&p[6], 12);
-      // Date: day, month, year-1900
       device.date = String(p[18]) + "/" + String(p[19]) + "/" +
                     String(1900 + p[20]);
     } else if (len >= 18) {
@@ -381,7 +437,7 @@ bool HartMaster::pollDynamic() {
       device.descriptor = unpackAscii(&p[6], 12);
     }
     break;
-  case 20:  // Long tag: 32 bytes Latin-1
+  case 20:
     if (len >= 1) {
       String lt;
       for (int k = 0; k < len && k < 32; k++) {
@@ -394,11 +450,24 @@ bool HartMaster::pollDynamic() {
       device.longTag = lt;
     }
     break;
-  case 0:
-    doCommand0(true, 0);  // refresh identity over long frame
-    break;
   default:
     break;
+  }
+}
+
+bool HartMaster::pollDynamic() {
+  // Rotate through data commands. 15 + 14 cache range/damping for maintenance UI.
+  static const uint8_t seq[] = {3, 2, 15, 14, 3, 13, 3, 20, 3, 12, 3, 0};
+  uint8_t cmd = seq[pollStep % (sizeof(seq) / sizeof(seq[0]))];
+  pollStep++;
+
+  bool ok = transact(true, 0, cmd, nullptr, 0);
+  if (!ok) {
+    return false;
+  }
+  applyResponse(cmd, rxPayload, rxPayloadLen);
+  if (cmd == 0) {
+    doCommand0(true, 0);
   }
   return true;
 }
@@ -459,7 +528,7 @@ void HartMaster::service(unsigned long now) {
 
     if (pollDynamic()) {
       consecutiveFailures = 0;
-      if (refreshBurst && pollStep >= 4) {
+      if (refreshBurst && pollStep >= 5) {
         refreshBurst = false;
       }
     } else {
@@ -547,6 +616,125 @@ void HartMaster::serviceQueuedCommand() {
   portEXIT_CRITICAL(&cmdMux);
 }
 
+bool HartMaster::executeCommandWait(uint8_t command, const uint8_t *data,
+                                    uint8_t len, uint32_t timeoutMs) {
+  if (!haveLongAddr) {
+    return false;
+  }
+  uint32_t id = queueCommand(command, data, len);
+  if (!id) {
+    return false;
+  }
+  unsigned long start = millis();
+  while (millis() - start < timeoutMs) {
+    if (!cmdPending) {
+      portENTER_CRITICAL(&cmdMux);
+      bool done = cmdDone && resId == id;
+      bool ok = resOk;
+      uint8_t rlen = resLen;
+      uint8_t rbuf[128];
+      if (done && ok && rlen) {
+        rlen = (rlen > sizeof(rbuf)) ? sizeof(rbuf) : rlen;
+        memcpy(rbuf, resData, rlen);
+      } else {
+        rlen = 0;
+      }
+      portEXIT_CRITICAL(&cmdMux);
+      if (done) {
+        if (ok && rlen) {
+          applyResponse(command, rbuf, rlen);
+        }
+        return ok;
+      }
+    }
+    vTaskDelay(5);
+  }
+  portENTER_CRITICAL(&cmdMux);
+  if (cmdPending && pendId == id) {
+    cmdPending = false;
+    cmdDone = true;
+    resOk = false;
+  }
+  portEXIT_CRITICAL(&cmdMux);
+  return false;
+}
+
+bool HartMaster::readConfigurationNow() {
+  if (!haveLongAddr) {
+    return false;
+  }
+  executeCommandWait(15, nullptr, 0, 3500);
+  executeCommandWait(14, nullptr, 0, 3500);
+  return device.configValid;
+}
+
+bool HartMaster::writeRangeValues(float urv, float lrv) {
+  if (!haveLongAddr) {
+    return false;
+  }
+  if (device.writeProtect == 1) {
+    return false;
+  }
+  if (!device.configValid) {
+    readConfigurationNow();
+  }
+  uint8_t units = effectiveUnitsCode();
+  if (!units) {
+    return false;
+  }
+  if (isnan(lrv)) {
+    lrv = device.configLrv;
+  }
+  if (isnan(urv)) {
+    urv = device.configUrv;
+  }
+  if (isnan(lrv)) {
+    lrv = 0.0f;
+  }
+  if (isnan(urv)) {
+    return false;
+  }
+  uint8_t payload[9];
+  payload[0] = units;
+  wrFloatBe(urv, &payload[1]);
+  wrFloatBe(lrv, &payload[5]);
+  if (!executeCommandWait(35, payload, 9, 5000)) {
+    return false;
+  }
+  device.configUrv = urv;
+  device.configLrv = lrv;
+  device.configUnits = units;
+  device.configValid = true;
+  device.configLastMs = millis();
+  return true;
+}
+
+bool HartMaster::writeDampingValue(float seconds) {
+  if (!haveLongAddr || device.writeProtect == 1) {
+    return false;
+  }
+  uint8_t payload[4];
+  wrFloatBe(seconds, payload);
+  if (!executeCommandWait(34, payload, 4, 5000)) {
+    return false;
+  }
+  device.configDamping = seconds;
+  device.configLastMs = millis();
+  return true;
+}
+
+bool HartMaster::writePollAddressValue(uint8_t addr) {
+  if (!haveLongAddr || addr > 63) {
+    return false;
+  }
+  uint8_t b = addr;
+  if (!executeCommandWait(6, &b, 1, 5000)) {
+    return false;
+  }
+  device.pollAddress = addr;
+  return true;
+}
+
 String HartMaster::resultJson(uint32_t id) {
   String j = "{\"id\":" + String(id) + ",";
   portENTER_CRITICAL(&cmdMux);
@@ -618,8 +806,10 @@ String HartMaster::toJson() {
   j += "\"loopCurrent\":" + fnum(device.loopCurrent, 3) + ",";
   j += "\"percentRange\":" + fnum(device.percentRange, 2) + ",";
   j += "\"pvUnits\":\"" + device.pvUnits + "\",";
+  j += "\"pvUnitsCode\":" + String(device.pvUnitsCode) + ",";
   j += "\"configValid\":" + String(device.configValid ? "true" : "false") + ",";
   j += "\"configUnits\":" + String(device.configUnits) + ",";
+  j += "\"configUnitsStr\":\"" + unitString(effectiveUnitsCode()) + "\",";
   j += "\"configUrv\":" + fnum(device.configUrv, 3) + ",";
   j += "\"configLrv\":" + fnum(device.configLrv, 3) + ",";
   j += "\"configDamping\":" + fnum(device.configDamping, 2) + ",";

@@ -460,14 +460,15 @@ let cfgCache={units:0,urv:NaN,lrv:NaN,damp:NaN};
 
 function fillMaintFromDevice(d){
   if(d.configValid){
-    cfgCache.units=d.configUnits;cfgCache.urv=d.configUrv;
-    cfgCache.lrv=d.configLrv;cfgCache.damp=d.configDamping;
+    cfgCache.units=d.configUnits||d.pvUnitsCode;
+    cfgCache.urv=d.configUrv;cfgCache.lrv=d.configLrv;cfgCache.damp=d.configDamping;
   }
+  const units=d.configUnitsStr||d.pvUnits||'--';
   const wp=d.writeProtect;
   $('cfgTbl').innerHTML=rowsHtml([
-    ['Units code',d.configValid?d.configUnits:'--'],
-    ['URV',d.configValid?fmt(d.configUrv,3):'--'],
-    ['LRV',d.configValid?fmt(d.configLrv,3):'--'],
+    ['Units',units],
+    ['URV',d.configValid?fmt(d.configUrv,3)+' '+units:'--'],
+    ['LRV',d.configValid?fmt(d.configLrv,3)+' '+units:'--'],
     ['Damping (s)',d.configValid?fmt(d.configDamping,2):'--'],
     ['Write Protect',wp===0?'No':(wp===1?'Yes':'--')],
     ['Poll Address',d.pollAddress],
@@ -479,6 +480,9 @@ function fillMaintFromDevice(d){
     $('inDamp').value=isNaN(d.configDamping)?'':Number(d.configDamping).toFixed(2);
   }
   $('inPoll').value=d.pollAddress;
+  if(wp===1){
+    $('maintWarn').innerHTML='<div class="banner">Write protect is ON. Range and damping writes will fail until disabled at the transmitter.</div>';
+  }
 }
 
 async function loadMaint(){
@@ -501,10 +505,10 @@ async function loadMaint(){
 async function readConfig(){
   toast('Reading configuration...');
   try{
-    await triggerRefresh();
-    const d=await waitForFreshData(x=>x.configValid,8000);
-    if(!d.configValid)throw new Error('device did not return configuration');
-    fillMaintFromDevice(d);
+    const r=await fetch('/api/hart/config/read',{method:'POST'});
+    const j=await r.json();
+    if(!j.ok)throw new Error('device did not return configuration');
+    fillMaintFromDevice(j.hart?j.hart:await(await fetch('/api/hart')).json());
     toast('Configuration updated');
   }catch(e){toast('Failed: '+e.message);}
 }
@@ -519,28 +523,46 @@ async function refreshDevice(){
   }catch(e){toast('Refresh failed: '+e.message);}
 }
 async function writeRange(urv,lrv){
-  const payload=[cfgCache.units].concat(wrFloat(urv)).concat(wrFloat(lrv));
-  await hartCmd(35,b2hx(payload));
+  const body=new URLSearchParams({urv:String(urv)});
+  if(!isNaN(lrv))body.set('lrv',String(lrv));
+  const r=await fetch('/api/hart/range',{method:'POST',body});
+  const j=await r.json();
+  if(!j.ok)throw new Error(j.message||'write failed');
 }
 async function writeUrv(){
   const v=parseFloat($('inUrv').value);if(isNaN(v))return toast('Enter a value');
-  if(!await confirmDialog('Change URV',[['Current',fmt(cfgCache.urv,3)],['New',v.toFixed(3)]]))return;
-  try{await writeRange(v,cfgCache.lrv);toast('URV updated');loadMaint();}catch(e){toast('Failed: '+e.message);}
+  const cur=cfgCache.urv;
+  if(!await confirmDialog('Change URV',[['Current',fmt(cur,3)],['New',v.toFixed(3)]]))return;
+  try{
+    const lrv=isNaN(cfgCache.lrv)?parseFloat($('inLrv').value):cfgCache.lrv;
+    await writeRange(v,lrv);toast('URV updated');await readConfig();
+  }catch(e){toast('Failed: '+e.message);}
 }
 async function writeLrv(){
   const v=parseFloat($('inLrv').value);if(isNaN(v))return toast('Enter a value');
   if(!await confirmDialog('Change LRV',[['Current',fmt(cfgCache.lrv,3)],['New',v.toFixed(3)]]))return;
-  try{await writeRange(cfgCache.urv,v);toast('LRV updated');loadMaint();}catch(e){toast('Failed: '+e.message);}
+  try{
+    const urv=isNaN(cfgCache.urv)?parseFloat($('inUrv').value):cfgCache.urv;
+    await writeRange(urv,v);toast('LRV updated');await readConfig();
+  }catch(e){toast('Failed: '+e.message);}
 }
 async function writeDamping(){
   const v=parseFloat($('inDamp').value);if(isNaN(v))return toast('Enter a value');
   if(!await confirmDialog('Change Damping',[['Current',fmt(cfgCache.damp,2)+' s'],['New',v.toFixed(2)+' s']]))return;
-  try{await hartCmd(34,b2hx(wrFloat(v)));toast('Damping updated');loadMaint();}catch(e){toast('Failed: '+e.message);}
+  try{
+    const r=await fetch('/api/hart/damping',{method:'POST',body:new URLSearchParams({value:String(v)})});
+    const j=await r.json();if(!j.ok)throw new Error('write failed');
+    toast('Damping updated');await readConfig();
+  }catch(e){toast('Failed: '+e.message);}
 }
 async function writePollAddr(){
   const v=parseInt($('inPoll').value);if(isNaN(v)||v<0||v>63)return toast('0-63');
   if(!await confirmDialog('Change Poll Address',[['New',v]]))return;
-  try{await hartCmd(6,b2hx([v]));toast('Poll address set to '+v);}catch(e){toast('Failed: '+e.message);}
+  try{
+    const r=await fetch('/api/hart/polladdr',{method:'POST',body:new URLSearchParams({address:String(v)})});
+    const j=await r.json();if(!j.ok)throw new Error('write failed');
+    toast('Poll address set to '+v);
+  }catch(e){toast('Failed: '+e.message);}
 }
 async function loopTest(ma){
   if(!await confirmDialog('Loop Test',[['Force output',ma+' mA']]))return;

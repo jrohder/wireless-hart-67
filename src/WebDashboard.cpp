@@ -166,6 +166,52 @@ void WebDashboard::setupRoutes() {
     req->send(200, "application/json", "{\"ok\":true}");
   });
 
+  server.on("/api/hart/config/read", HTTP_POST, [this](AsyncWebServerRequest *req) {
+    bool ok = master->readConfigurationNow();
+    req->send(ok ? 200 : 503, "application/json",
+              String("{\"ok\":") + (ok ? "true" : "false") + ",\"hart\":" +
+                  master->toJson() + "}");
+  });
+
+  server.on("/api/hart/range", HTTP_POST, [this](AsyncWebServerRequest *req) {
+    if (!req->hasParam("urv", true)) {
+      req->send(400, "application/json", "{\"error\":\"urv required\"}");
+      return;
+    }
+    float urv = req->getParam("urv", true)->value().toFloat();
+    float lrv = NAN;
+    if (req->hasParam("lrv", true)) {
+      lrv = req->getParam("lrv", true)->value().toFloat();
+    }
+    bool ok = master->writeRangeValues(urv, lrv);
+    String msg = ok ? "Range updated" : "Write failed (check write protect / units)";
+    req->send(ok ? 200 : 503, "application/json",
+              String("{\"ok\":") + (ok ? "true" : "false") + ",\"message\":\"" +
+                  msg + "\"}");
+  });
+
+  server.on("/api/hart/damping", HTTP_POST, [this](AsyncWebServerRequest *req) {
+    if (!req->hasParam("value", true)) {
+      req->send(400, "application/json", "{\"error\":\"value required\"}");
+      return;
+    }
+    float v = req->getParam("value", true)->value().toFloat();
+    bool ok = master->writeDampingValue(v);
+    req->send(ok ? 200 : 503, "application/json",
+              String("{\"ok\":") + (ok ? "true" : "false") + "}");
+  });
+
+  server.on("/api/hart/polladdr", HTTP_POST, [this](AsyncWebServerRequest *req) {
+    if (!req->hasParam("address", true)) {
+      req->send(400, "application/json", "{\"error\":\"address required\"}");
+      return;
+    }
+    uint8_t addr = (uint8_t)req->getParam("address", true)->value().toInt();
+    bool ok = master->writePollAddressValue(addr);
+    req->send(ok ? 200 : 503, "application/json",
+              String("{\"ok\":") + (ok ? "true" : "false") + "}");
+  });
+
   server.on("/api/master", HTTP_POST, [this](AsyncWebServerRequest *req) {
     if (req->hasParam("enabled", true)) {
       String v = req->getParam("enabled", true)->value();
